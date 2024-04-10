@@ -13,6 +13,7 @@ class Rel_encoder(nn.Module):
         self.head_extractor = nn.Linear(2 * config.hidden_size, emb_size)
         self.tail_extractor = nn.Linear(2 * config.hidden_size, emb_size)
         self.bilinear = nn.Linear(emb_size * block_size, num_class)
+        self.low_dim = nn.Linear(config.hidden_size, low_dim)
 
 
         self.emb_size = emb_size
@@ -103,7 +104,7 @@ class Rel_encoder(nn.Module):
         b2 = ts.view(-1, self.emb_size // self.block_size, self.block_size)
         bl = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size) 
         #[n_hti, self.emb_size // self.block_size, self.block_size, 1] * [n_hti, self.emb_size // self.block_size, 1, self.block_size]
-        r = hs * ts 
+        r = self.low_dim(hs * ts)
         logits = self.bilinear(bl)
 
         return logits,r

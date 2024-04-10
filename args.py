@@ -63,7 +63,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 
-parser.add_argument('--num-class', default=1000, type=int)
+parser.add_argument('--num-class', default=97, type=int)
 parser.add_argument('--low-dim', default=128, type=int,
                     help='embedding dimension')
 parser.add_argument('--moco_queue', default=8192, type=int, 

@@ -100,9 +100,9 @@ class MoPro(nn.Module):
 
         input_ids = batch[0].cuda(args.gpu, non_blocking=True)        
         attention_mask = batch[1].cuda(args.gpu, non_blocking=True) 
-        labels = batch[1].cuda(args.gpu, non_blocking=True)
-        entity_pos = batch[1].cuda(args.gpu, non_blocking=True)
-        hts = batch[1].cuda(args.gpu, non_blocking=True)
+        labels = batch[2]
+        entity_pos = batch[3]
+        hts = batch[4]
         
         output,q = self.encoder_q(input_ids,attention_mask,labels,entity_pos,hts)
         if is_eval:  
@@ -113,7 +113,12 @@ class MoPro(nn.Module):
         with torch.no_grad():  # no gradient 
             self._momentum_update_key_encoder(args)  # update the momentum encoder
             # shuffle for making use of BN
-            img_aug, idx_unshuffle = self._batch_shuffle_ddp(img_aug)
+            batch, idx_unshuffle = self._batch_shuffle_ddp(batch)
+            input_ids = batch[0].cuda(args.gpu, non_blocking=True)        
+            attention_mask = batch[1].cuda(args.gpu, non_blocking=True) 
+            labels = batch[2]
+            entity_pos = batch[3]
+            hts = batch[4]
             _, k = self.encoder_k(input_ids,attention_mask,labels,entity_pos,hts)  
             # undo shuffle
             k = self._batch_unshuffle_ddp(k, idx_unshuffle)
