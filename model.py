@@ -8,6 +8,7 @@ class MoPro(nn.Module):
 
     def __init__(self, base_encoder, args, config, model):
         super(MoPro, self).__init__()
+        self.nums_labels = 1
         
         #encoder
         self.encoder_q = base_encoder(config, model, num_class=args.num_class,low_dim=args.low_dim)
@@ -24,6 +25,9 @@ class MoPro(nn.Module):
         self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))        
         self.register_buffer("prototypes", torch.zeros(args.num_class,args.low_dim))
 
+        #loss
+        self.loss_ce = nn.CrossEntropyLoss()
+
     @torch.no_grad()
     def _momentum_update_key_encoder(self, args):
         """
@@ -35,12 +39,12 @@ class MoPro(nn.Module):
     @torch.no_grad()
     def _dequeue_and_enqueue(self, keys, args):
         # gather keys before updating queue
-        keys = concat_all_gather(keys)
+        # keys = concat_all_gather(keys)
 
         batch_size = keys.shape[0]
 
         ptr = int(self.queue_ptr)
-        assert args.moco_queue % batch_size == 0  # for simplicity
+        # assert args.moco_queue % batch_size == 0  # for simplicity
 
         # replace the keys at ptr (dequeue and enqueue)
         self.queue[:, ptr:ptr + batch_size] = keys.T
@@ -55,9 +59,12 @@ class MoPro(nn.Module):
         *** Only support DistributedDataParallel (DDP) model. ***
         """
         # gather from all gpus
-        batch_size_this = x.shape[0]
+        # batch_size_this = x.shape[0]
+        # x_gather = concat_all_gather(x)
+        # batch_size_all = x_gather.shape[0]
+        batch_size_this = x[0].shape[0]
         x_gather = concat_all_gather(x)
-        batch_size_all = x_gather.shape[0]
+        batch_size_all = x_gather[0].shape[0]
 
         num_gpus = batch_size_all // batch_size_this
 
@@ -83,9 +90,12 @@ class MoPro(nn.Module):
         *** Only support DistributedDataParallel (DDP) model. ***
         """
         # gather from all gpus
-        batch_size_this = x.shape[0]
+        # batch_size_this = x.shape[0]
+        # x_gather = concat_all_gather(x)
+        # batch_size_all = x_gather.shape[0]
+        batch_size_this = x[0].shape[0]
         x_gather = concat_all_gather(x)
-        batch_size_all = x_gather.shape[0]
+        batch_size_all = x_gather[0].shape[0]
 
         num_gpus = batch_size_all // batch_size_this
 
@@ -103,6 +113,8 @@ class MoPro(nn.Module):
         labels = batch[2]
         entity_pos = batch[3]
         hts = batch[4]
+        # label_id = batch[5].cuda(args.gpu, non_blocking=True) 
+        label_id = batch[5].cuda(args.gpu, non_blocking=True)
         
         output,q = self.encoder_q(input_ids,attention_mask,labels,entity_pos,hts)
         if is_eval:  
@@ -113,7 +125,7 @@ class MoPro(nn.Module):
         with torch.no_grad():  # no gradient 
             self._momentum_update_key_encoder(args)  # update the momentum encoder
             # shuffle for making use of BN
-            batch, idx_unshuffle = self._batch_shuffle_ddp(batch)
+            # batch, idx_unshuffle = self._batch_shuffle_ddp(batch)
             input_ids = batch[0].cuda(args.gpu, non_blocking=True)        
             attention_mask = batch[1].cuda(args.gpu, non_blocking=True) 
             labels = batch[2]
@@ -121,7 +133,7 @@ class MoPro(nn.Module):
             hts = batch[4]
             _, k = self.encoder_k(input_ids,attention_mask,labels,entity_pos,hts)  
             # undo shuffle
-            k = self._batch_unshuffle_ddp(k, idx_unshuffle)
+            # k = self._batch_unshuffle_ddp(k, idx_unshuffle)
 
         # compute instance logits
         l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
@@ -156,11 +168,13 @@ class MoPro(nn.Module):
             
             # confident sample index
             clean_idx = clean_idx | correct_idx            
-            clean_idx_all = concat_all_gather(clean_idx.long())                       
+            # clean_idx_all = concat_all_gather(clean_idx.long())                       
         
         # aggregate features and (pseudo) labels across all gpus
-        targets = concat_all_gather(target)
-        features = concat_all_gather(q)
+        # targets = concat_all_gather(target)
+        # features = concat_all_gather(q)
+        targets = label_id
+        features = q
 
         if is_clean:                 
             clean_idx_all = clean_idx_all.bool()
@@ -175,12 +189,29 @@ class MoPro(nn.Module):
         else:
             # update momentum prototypes with original labels
             for feat,label in zip(features,targets):
-                self.prototypes[label] = self.prototypes[label]*args.proto_m + (1-args.proto_m)*feat            
+                for l in label:
+                    if l != 0:
+                        self.prototypes[l] = self.prototypes[l]*args.proto_m + (1-args.proto_m)*feat            
 
         # normalize prototypes    
-        self.prototypes = F.normalize(self.prototypes, p=2, dim=1)        
+        self.prototypes = F.normalize(self.prototypes, p=2, dim=1)
 
-        return output, target, logits, inst_labels, logits_proto
+        #loss
+        labels = [torch.tensor(label) for label in labels]
+        labels = torch.cat(labels, dim=0).to(logits)
+        loss_proto = 0
+        if is_proto:
+            loss_proto = args.w_proto * self.loss_ce(logits_proto, labels) 
+        
+        loss_cls = self.loss_ce(output, labels)   
+        # instance contrastive loss
+        loss_inst = self.loss_ce(logits, inst_labels)  
+        
+        loss = loss_cls + args.w_inst*loss_inst + loss_proto 
+
+        output = get_label(output,num_labels=self.nums_labels)            
+
+        return output,loss
 
 
 # utils
@@ -195,4 +226,16 @@ def concat_all_gather(tensor):
     torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
 
     output = torch.cat(tensors_gather, dim=0)
+    return output
+
+def get_label(logits, num_labels=-1):
+    th_logit = logits[:, 0].unsqueeze(1)
+    output = torch.zeros_like(logits).to(logits)
+    mask = (logits > th_logit)
+    if num_labels > 0:
+        top_v, _ = torch.topk(logits, num_labels, dim=1)
+        top_v = top_v[:, -1]
+        mask = (logits >= top_v.unsqueeze(1))
+    output[mask] = 1.0
+    output[:, 0] = (output.sum(1) == 0.).to(logits)
     return output

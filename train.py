@@ -19,6 +19,7 @@ import torch.utils.data.distributed
 from prepro import read_docred 
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 from dataloader import DocRED_dataloader
+from evaluation import to_official, official_evaluate
 from rel_encoder import *
 from model import MoPro
 import wandb
@@ -136,7 +137,7 @@ def main_worker(gpu, ngpus_per_node, args):
         raise NotImplementedError("Only DistributedDataParallel is supported.")
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    
 
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
@@ -167,16 +168,29 @@ def main_worker(gpu, ngpus_per_node, args):
     test_file = os.path.join(args.data_dir, args.test_file)
 
     loader = DocRED_dataloader(train_file, dev_file, test_file, tokenizer, batch_size=args.batch_size, num_workers=args.workers, distributed=args.distributed, max_seq_length=args.max_seq_length)
-    train_loader,test_loader = loader.run()   
+    train_loader,test_loader,train_dataset,test_dataset= loader.run()  
 
+        
 
+def train(train_loader, test_loader, loader, test_dataset, model, optimizer, epoch, args, ngpus_per_node):
+    num_steps = 0
+    best_score = -1
     for epoch in range(args.start_epoch, args.epochs):
 
         if args.distributed:
             loader.train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
                 
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        for i, batch in enumerate(train_loader):
+            model.train()
+        # compute model output               
+            cls_out, target, logits, inst_labels, logits_proto,loss = \
+            model(batch,args,is_proto=(epoch>0),is_clean=(epoch>=args.start_clean_epoch))    
+ 
+        # compute gradient and do SGD step
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
     
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -186,92 +200,35 @@ def main_worker(gpu, ngpus_per_node, args):
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
             }, is_best=False, filename='{}/checkpoint_{:04d}.pth.tar'.format(args.exp_dir,epoch))
-        test(model, test_loader, args, epoch)
-        
-
-def train(train_loader, model, criterion, optimizer, epoch, args):
-    batch_time = AverageMeter('Time', ':1.2f')
-    data_time = AverageMeter('Data', ':1.2f')   
-    acc_cls = AverageMeter('Acc@Cls', ':2.2f')
-    acc_proto = AverageMeter('Acc@Proto', ':2.2f')
-    acc_inst = AverageMeter('Acc@Inst', ':2.2f')  
-    
-    progress = ProgressMeter(
-        len(train_loader),
-        [batch_time, data_time, acc_cls, acc_inst, acc_proto],
-        prefix="Epoch: [{}]".format(epoch))
+        dev_score, dev_output, pred = evaluate(model, test_loader, args, epoch)
 
     # switch to train mode
-    model.train()
+
     
-    end = time.time()
-    for i, batch in enumerate(train_loader):
-        # measure data loading time
-        data_time.update(time.time() - end)
-        
-        loss = 0
-        
-        # compute model output               
-        cls_out, target, logits, inst_labels, logits_proto = \
-            model(batch,args,is_proto=(epoch>0),is_clean=(epoch>=args.start_clean_epoch))
-        
-        if epoch>0:     
-            # prototypical contrastive loss
-            loss_proto = criterion(logits_proto, target)  
-            loss += args.w_proto*loss_proto
-            acc = accuracy(logits_proto, target)[0] 
-            acc_proto.update(acc[0]) 
-        
-        # classification loss
-        loss_cls = criterion(cls_out, target)   
-        # instance contrastive loss
-        loss_inst = criterion(logits, inst_labels)  
-        
-        loss += (loss_cls+args.w_inst*loss_inst)
-        
-        # log accuracy
-        acc = accuracy(cls_out, target)[0] 
-        acc_cls.update(acc[0])
-        acc = accuracy(logits, inst_labels)[0] 
-        acc_inst.update(acc[0])     
- 
-        # compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-        if i % args.print_freq == 0:
-            progress.display(i)
-            
-    if args.gpu == 0:
-        wandb.log(acc_cls.avg, epoch)
-        wandb.log( acc_inst.avg, epoch)
-        wandb.log(acc_proto.avg, epoch)
-        
-    
-def test(model, test_loader, args, epoch):
+def evaluate(model, test_loader, test_dataset, args, epoch, tag="dev"):
     with torch.no_grad():
-        print('==> Evaluation...')       
-        model.eval()    
-        top1_acc = AverageMeter("Top1")
-        top5_acc = AverageMeter("Top5")
-        
+        print('==> Evaluation...')               
         # evaluate on webvision val set
         for batch_idx, batch in enumerate(test_loader):
-            outputs,_,target = model(batch, args, is_eval=True)    
-            acc1, acc5 = accuracy(outputs, target, topk=(1, 5))
-            top1_acc.update(acc1[0])
-            top5_acc.update(acc5[0])
-        
-        # average across all processes
-        acc_tensors = torch.Tensor([top1_acc.avg,top5_acc.avg]).cuda(args.gpu)
-        dist.all_reduce(acc_tensors)        
-        acc_tensors /= args.world_size
-        
-        print('Webvision Accuracy is %.2f%% (%.2f%%)'%(acc_tensors[0],acc_tensors[1]))            
-    return   
+            model.eval()  
+            pred,_,target = model(batch, args, is_eval=True)
+            pred = pred.cpu().numpy()
+            pred[np.isnan(pred)] = 0
+            preds.append(pred)
+    features = test_dataset.dev_features
+    preds = np.concatenate(preds, axis=0).astype(np.float32)
+    ans = to_official(preds, features)
+    if len(ans) > 0:
+        best_f1, _, best_f1_ign, _,p,r = official_evaluate(ans, args.data_dir)
+    output = {
+        tag + "_F1": best_f1 * 100,
+        tag + "_F1_ign": best_f1_ign * 100,
+        tag + "_p": p * 100,
+        tag + "_r": r * 100,
+    }
+    # with open("result_atlop.json", "w") as fh:
+    #     json.dump(ans, fh)
+    return best_f1, output, ans             
 
 
     
@@ -279,48 +236,6 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, 'model_best.pth.tar')
-
-
-class AverageMeter(object):
-    """Computes and stores the average and current value"""
-    def __init__(self, name, fmt=':f'):
-        self.name = name
-        self.fmt = fmt
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
-
-    def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
-        return fmtstr.format(**self.__dict__)
-
-
-class ProgressMeter(object):
-    def __init__(self, num_batches, meters, prefix=""):
-        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
-        self.meters = meters
-        self.prefix = prefix
-
-    def display(self, batch):
-        entries = [self.prefix + self.batch_fmtstr.format(batch)]
-        entries += [str(meter) for meter in self.meters]
-        print('\t'.join(entries))
-
-    def _get_batch_fmtstr(self, num_batches):
-        num_digits = len(str(num_batches // 1))
-        fmt = '{:' + str(num_digits) + 'd}'
-        return '[' + fmt + '/' + fmt.format(num_batches) + ']'
-
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Decay the learning rate based on schedule"""
@@ -332,23 +247,6 @@ def adjust_learning_rate(optimizer, epoch, args):
             lr *= 0.1 if epoch >= milestone else 1.
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-
-
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
-    with torch.no_grad():
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
 
     
 if __name__ == '__main__':

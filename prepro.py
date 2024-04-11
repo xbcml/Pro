@@ -70,13 +70,18 @@ def read_docred(file_in, tokenizer, max_seq_length=1024,):
                     end = sent_map[m["sent_id"]][m["pos"][1]]
                     entity_pos[-1].append((start, end,))
 
+            label_id = []
+            id = []
             relations, hts = [], []  
             for h, t in train_triple.keys():#正样本
                 relation = [0] * len(docred_rel2id)
+                id=[]
                 for mention in train_triple[h, t]:
                     relation[mention["relation"]] = 1 #正样本
+                    id.append(mention["relation"])                   
                 relations.append(relation)
                 hts.append([h, t])
+                label_id.append(id)
                 pos_samples += 1
 
             for h in range(len(entities)):#负样本
@@ -85,6 +90,7 @@ def read_docred(file_in, tokenizer, max_seq_length=1024,):
                         relation = [1] + [0] * (len(docred_rel2id) - 1) #负样本[1,0,0,...]
                         relations.append(relation)
                         hts.append([h, t])
+                        label_id.append([0])
                         neg_samples += 1
 
             assert len(relations) == len(entities) * (len(entities) - 1)
@@ -100,7 +106,8 @@ def read_docred(file_in, tokenizer, max_seq_length=1024,):
                         #关系矩阵，与hts一一对应，哪位有1表示哪个关系
                     'hts': hts, #所有实体对
                     'title': sample['title'], #标题
-                    'sents': sents, #                   
+                    'sents': sents, #
+                    'label_id': label_id,                   
                     }
             # print(sents)
             features.append(feature)
