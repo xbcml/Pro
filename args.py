@@ -19,7 +19,7 @@ parser.add_argument("--max_seq_length", default=1024, type=int,
 parser.add_argument('--exp-dir', default='experiment/MoPro_V1', type=str,
                     help='experiment directory')
 
-parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet50',choices=['resnet50',])
+parser.add_argument('-a', '--arch', metavar='ARCH', default='atlop')
 parser.add_argument('-j', '--workers', default=32, type=int,
                     help='number of data loading workers (default: 32)')
 parser.add_argument('--epochs', default=90, type=int, 
@@ -30,7 +30,7 @@ parser.add_argument('-b', '--batch-size', default=64, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=0.001, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--schedule', default=[40, 80], nargs='*', type=int,
                     help='learning rate schedule (when to drop lr by 10x)')
@@ -66,7 +66,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
 parser.add_argument('--num-class', default=97, type=int)
 parser.add_argument('--low-dim', default=128, type=int,
                     help='embedding dimension')
-parser.add_argument('--moco_queue', default=8192, type=int, 
+parser.add_argument('--moco_queue', default=4096, type=int, 
                     help='queue size; number of negative samples')
 parser.add_argument('--moco_m', default=0.999, type=float,
                     help='momentum for updating momentum encoder')

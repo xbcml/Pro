@@ -1,2 +1,9 @@
 #!/usr/bin/env bash
-python train.py --exp-dir experiment/ --dist-url 'tcp://localhost:5678' --multiprocessing-distributed --world-size 1 --rank 0
+# CUDA_VISIBLE_DEVICES=1 \
+python train.py --exp-dir experiment/ \
+--dist-url 'tcp://localhost:5678' \
+--world-size 1 \
+--rank 0 \
+--batch-size 8 \
+--gpu 1
+# --multiprocessing-distributed \

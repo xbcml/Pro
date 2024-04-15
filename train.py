@@ -168,11 +168,13 @@ def main_worker(gpu, ngpus_per_node, args):
     test_file = os.path.join(args.data_dir, args.test_file)
 
     loader = DocRED_dataloader(train_file, dev_file, test_file, tokenizer, batch_size=args.batch_size, num_workers=args.workers, distributed=args.distributed, max_seq_length=args.max_seq_length)
-    train_loader,test_loader,train_dataset,test_dataset= loader.run()  
+    train_loader,test_loader,train_dataset,test_dataset= loader.run() 
+
+    train(train_loader, test_loader, loader, test_dataset, model, optimizer, args, ngpus_per_node)
 
         
 
-def train(train_loader, test_loader, loader, test_dataset, model, optimizer, epoch, args, ngpus_per_node):
+def train(train_loader, test_loader, loader, test_dataset, model, optimizer, args, ngpus_per_node):
     num_steps = 0
     best_score = -1
     for epoch in range(args.start_epoch, args.epochs):
@@ -184,7 +186,7 @@ def train(train_loader, test_loader, loader, test_dataset, model, optimizer, epo
         for i, batch in enumerate(train_loader):
             model.train()
         # compute model output               
-            cls_out, target, logits, inst_labels, logits_proto,loss = \
+            output,loss = \
             model(batch,args,is_proto=(epoch>0),is_clean=(epoch>=args.start_clean_epoch))    
  
         # compute gradient and do SGD step
