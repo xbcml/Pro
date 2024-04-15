@@ -28,6 +28,7 @@ from args import parser
 
 def main():
     args = parser.parse_args()
+    wandb.init(project="DocPro")
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -193,6 +194,7 @@ def train(train_loader, test_loader, loader, test_dataset, model, optimizer, arg
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            wandb.log({"loss": loss.item()}, step=i)
     
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -203,6 +205,8 @@ def train(train_loader, test_loader, loader, test_dataset, model, optimizer, arg
                 'optimizer' : optimizer.state_dict(),
             }, is_best=False, filename='{}/checkpoint_{:04d}.pth.tar'.format(args.exp_dir,epoch))
         dev_score, dev_output, pred = evaluate(model, test_loader, args, epoch)
+        print("epoch '{}'".format(epoch))
+        print(dev_output)
 
     # switch to train mode
 

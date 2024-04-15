@@ -47,7 +47,18 @@ class MoPro(nn.Module):
         # assert args.moco_queue % batch_size == 0  # for simplicity
 
         # replace the keys at ptr (dequeue and enqueue)
-        self.queue[:, ptr:ptr + batch_size] = keys.T
+        if ptr + batch_size < args.moco_queue :
+            self.queue[:, ptr:ptr + batch_size] = keys.T
+        elif ptr + batch_size < 2 *args.moco_queue:
+            k1 = keys[0:args.moco_queue-ptr-1]
+            k2 = keys[args.moco_queue-ptr-1:-1]
+            self.queue[:, ptr:-1] = k1.T
+            self.queue[:, 0:ptr + batch_size-args.moco_queue] = k2.T
+        else:
+            k1 = keys[0:args.moco_queue-ptr-1]
+            k2 = keys[args.moco_queue-ptr-1:2*args.moco_queue-ptr-1]
+            self.queue[:, ptr:-1] = k1.T
+            self.queue[:, 0:args.moco_queue-1] = k2.T
         ptr = (ptr + batch_size) % args.moco_queue  # move pointer
 
         self.queue_ptr[0] = ptr
