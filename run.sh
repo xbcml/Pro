@@ -5,5 +5,5 @@ python train.py --exp-dir experiment/ \
 --world-size 1 \
 --rank 0 \
 --batch-size 8 \
---gpu 1
+--gpu 0
 # --multiprocessing-distributed \

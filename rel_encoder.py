@@ -4,7 +4,7 @@ from opt_einsum import contract
 from long_seq import process_long_input
 
 class Rel_encoder(nn.Module):
-    def __init__(self, config, model, num_class, low_dim,emb_size=768, block_size=64, num_labels=-1):
+    def __init__(self, config, model, num_class,emb_size=768, block_size=64, num_labels=-1):
         super().__init__()
         self.config = config
         self.model = model
@@ -13,7 +13,7 @@ class Rel_encoder(nn.Module):
         self.head_extractor = nn.Linear(2 * config.hidden_size, emb_size)
         self.tail_extractor = nn.Linear(2 * config.hidden_size, emb_size)
         self.bilinear = nn.Linear(emb_size * block_size, num_class)
-        self.low_dim = nn.Linear(config.hidden_size, low_dim)
+        # self.low_dim = nn.Linear(config.hidden_size, low_dim)
 
 
         self.emb_size = emb_size
@@ -104,9 +104,9 @@ class Rel_encoder(nn.Module):
         b2 = ts.view(-1, self.emb_size // self.block_size, self.block_size)
         bl = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size) 
         #[n_hti, self.emb_size // self.block_size, self.block_size, 1] * [n_hti, self.emb_size // self.block_size, 1, self.block_size]
-        r = self.low_dim(hs * ts)
+        r = hs * rs
         logits = self.bilinear(bl)
 
-        return logits,r
+        return logits , r
 
 

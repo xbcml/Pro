@@ -184,40 +184,42 @@ def train(train_loader, test_loader, loader, test_dataset, model, optimizer, arg
             loader.train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
                 
-        for i, batch in enumerate(train_loader):
-            model.train()
-        # compute model output               
-            output,loss = \
-            model(batch,args,is_proto=(epoch>0),is_clean=(epoch>=args.start_clean_epoch))    
+        # for i, batch in enumerate(train_loader):
+        #     model.train()
+        # # compute model output               
+        #     output,loss = \
+        #     model(batch,args,is_proto=(epoch>0),is_clean=(epoch>=args.start_clean_epoch))    
  
-        # compute gradient and do SGD step
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            wandb.log({"loss": loss.item()}, step=i)
+        # # compute gradient and do SGD step
+        #     optimizer.zero_grad()
+        #     loss.backward()
+        #     optimizer.step()
+        #     wandb.log({"loss": loss.item()}, step=i)
     
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
-            }, is_best=False, filename='{}/checkpoint_{:04d}.pth.tar'.format(args.exp_dir,epoch))
-        dev_score, dev_output, pred = evaluate(model, test_loader, args, epoch)
+        # if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+        #         and args.rank % ngpus_per_node == 0):
+        #     save_checkpoint({
+        #         'epoch': epoch + 1,
+        #         'arch': args.arch,
+        #         'state_dict': model.state_dict(),
+        #         'optimizer' : optimizer.state_dict(),
+        #     }, is_best=False, filename='{}/checkpoint_{:04d}.pth.tar'.format(args.exp_dir,epoch))
+        dev_score, dev_output, pred = evaluate(model, test_loader, test_dataset, args)
         print("epoch '{}'".format(epoch))
         print(dev_output)
 
     # switch to train mode
 
     
-def evaluate(model, test_loader, test_dataset, args, epoch, tag="dev"):
+def evaluate(model, test_loader, test_dataset, args, tag="dev"):
+    preds = []
+    best_f1, best_f1_ign = -1, -1 
     with torch.no_grad():
         print('==> Evaluation...')               
         # evaluate on webvision val set
         for batch_idx, batch in enumerate(test_loader):
             model.eval()  
-            pred,_,target = model(batch, args, is_eval=True)
+            pred,_= model(batch, args, is_eval=True)
             pred = pred.cpu().numpy()
             pred[np.isnan(pred)] = 0
             preds.append(pred)
